@@ -11,13 +11,14 @@ from chatbot_widget.mcp.server_manager import MCPServerManager
 
 class ChatMCPController:
 
-    def __init__(self, mcp_server_manager: MCPServerManager, model: str = "openai:gpt-5"):
+    def __init__(self, mcp_server_manager: MCPServerManager, model: str = "openai:gpt-5", system_prompt: str | None = None):
         """Initialize the MCP chat controller.
 
         Args:
             mcp_server_manager: Manager that coordinates available MCP servers.
             model: Identifier for the chat model. Currently only OpenAI models are supported
                 (for example: openai:gpt-4o-mini, openai:gpt-4o, openai:gpt-4.1-mini, openai:gpt-5).
+            system_prompt: Optional system prompt to set the assistant's behavior.
 
         Raises:
             ValueError: If the provided model is not an OpenAI model.
@@ -45,7 +46,7 @@ class ChatMCPController:
         self.ui = ChatView()
 
         all_tools = run_async(self.client.get_tools())
-        self.agent = create_agent(self.model, all_tools, checkpointer=InMemorySaver())
+        self.agent = create_agent(self.model, all_tools, system_prompt=system_prompt, checkpointer=InMemorySaver())
 
         # connect UI
         self.ui.on_send(self.handle_input)

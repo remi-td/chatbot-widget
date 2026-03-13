@@ -1,6 +1,8 @@
 import asyncio
 import nest_asyncio
 
+nest_asyncio.apply()
+
 def run_async(coro):
     """
     Run an async coroutine safely in both normal Python scripts and Jupyter notebooks.
@@ -61,9 +63,5 @@ def run_async(coro):
     - This function is a practical workaround when you want sync-like control flow
       without refactoring your entire codebase to be async.
     """
-    try:
-        return asyncio.run(coro)
-    except RuntimeError:
-        nest_asyncio.apply()
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(coro)
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(coro)
