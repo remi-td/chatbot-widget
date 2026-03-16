@@ -72,16 +72,19 @@ class ChatMCPController:
         self.ui.show_waiting_indicator()
 
         async def _stream():
+            # run_id -> (stream_id, accumulated_text)
+            model_streams: dict[str, tuple[str, str]] = {}
+
             async for event in self.agent.astream_events(
                 {"messages": [{"role": "user", "content": msg}]},
                 {"configurable": {"thread_id": "1"}},
                 version="v2",
             ):
                 kind = event["event"]
+                run_id = event.get("run_id", "")
 
                 if kind == "on_tool_start":
                     tool_name = event["name"]
-                    run_id = event["run_id"]
                     args = event["data"].get("input", {})
                     server_name = self.lookup_tool_server.get(tool_name)
                     full_tool_name = f"{server_name}::{tool_name}"
@@ -89,14 +92,42 @@ class ChatMCPController:
 
                 elif kind == "on_tool_end":
                     tool_name = event["name"]
-                    run_id = event["run_id"]
                     output = event["data"].get("output")
                     content = output.content if hasattr(output, "content") else str(output)
                     self.ui.receive_tool_reply(run_id, tool_name, content)
 
+                elif kind == "on_chat_model_stream":
+                    chunk = event["data"].get("chunk")
+                    token = chunk.content if (chunk and isinstance(chunk.content, str)) else ""
+                    if token:
+                        if run_id not in model_streams:
+                            stream_id = self.ui.start_stream("bot")
+                            model_streams[run_id] = (stream_id, token)
+                        else:
+                            stream_id, accumulated = model_streams[run_id]
+                            accumulated += token
+                            model_streams[run_id] = (stream_id, accumulated)
+                        self.ui.stream_update(model_streams[run_id][0], model_streams[run_id][1])
+
                 elif kind == "on_chat_model_end":
                     output = event["data"].get("output")
-                    if output and output.content and not getattr(output, "tool_calls", None):
+                    has_tool_calls = bool(getattr(output, "tool_calls", None))
+                    stream_entry = model_streams.pop(run_id, None)
+
+                    if stream_entry:
+                        stream_id, _ = stream_entry
+                        if has_tool_calls:
+                            # intermediate tool-calling step — discard the partial bubble
+                            bubble = self.ui._active_streams.pop(stream_id, None)
+                            if bubble:
+                                children = list(self.ui.chat_box.children)
+                                if bubble.widget in children:
+                                    children.remove(bubble.widget)
+                                    self.ui.chat_box.children = tuple(children)
+                        else:
+                            self.ui.end_stream(stream_id)
+                    elif not has_tool_calls and output and output.content:
+                        # no streaming happened (e.g. model returned full response at once)
                         self.ui.receive_message(output.content, "bot")
 
         try:
