@@ -1,3 +1,4 @@
+import ast
 import datetime as _dt
 import html
 import json
@@ -254,11 +255,22 @@ class ChatView:
     def _format_tool_payload(payload: str) -> str:
         text = payload if isinstance(payload, str) else str(payload)
         stripped = text.strip()
-        formatted = stripped
+        parsed = None
         try:
             parsed = json.loads(stripped)
-            formatted = json.dumps(parsed, indent=2, ensure_ascii=False)
         except Exception:
+            pass
+        if parsed is None:
+            try:
+                parsed = ast.literal_eval(stripped)
+            except Exception:
+                pass
+        if parsed is not None:
+            formatted = json.dumps(parsed, indent=2, ensure_ascii=False)
+            # Unescape escape sequences inside JSON string values so they
+            # render as actual whitespace in the <pre> block, not literal \n \t
+            formatted = formatted.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '')
+        else:
             formatted = stripped
         escaped = html.escape(formatted)
         return f"<pre style='margin:0;white-space:pre-wrap;'>{escaped}</pre>"

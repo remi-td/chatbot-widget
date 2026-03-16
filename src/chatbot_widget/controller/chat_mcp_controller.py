@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
@@ -74,6 +75,9 @@ class ChatMCPController:
         async def _stream():
             # run_id -> (stream_id, accumulated_text)
             model_streams: dict[str, tuple[str, str]] = {}
+            # run_id -> last UI update timestamp
+            last_update: dict[str, float] = {}
+            INTERVAL = 0.08  # seconds between UI refreshes during streaming
 
             async for event in self.agent.astream_events(
                 {"messages": [{"role": "user", "content": msg}]},
@@ -88,7 +92,7 @@ class ChatMCPController:
                     args = event["data"].get("input", {})
                     server_name = self.lookup_tool_server.get(tool_name)
                     full_tool_name = f"{server_name}::{tool_name}"
-                    self.ui.receive_tool_call(run_id, full_tool_name, str(args))
+                    self.ui.receive_tool_call(run_id, full_tool_name, json.dumps(args, ensure_ascii=False))
 
                 elif kind == "on_tool_end":
                     tool_name = event["name"]
@@ -98,24 +102,36 @@ class ChatMCPController:
 
                 elif kind == "on_chat_model_stream":
                     chunk = event["data"].get("chunk")
-                    token = chunk.content if (chunk and isinstance(chunk.content, str)) else ""
+                    token = ""
+                    if chunk:
+                        c = chunk.content
+                        if isinstance(c, str):
+                            token = c
+                        elif isinstance(c, list):
+                            token = "".join(b.get("text", "") if isinstance(b, dict) else "" for b in c)
                     if token:
                         if run_id not in model_streams:
                             stream_id = self.ui.start_stream("bot")
                             model_streams[run_id] = (stream_id, token)
+                            last_update[run_id] = time.monotonic()
+                            self.ui.stream_update(stream_id, token)
                         else:
                             stream_id, accumulated = model_streams[run_id]
                             accumulated += token
                             model_streams[run_id] = (stream_id, accumulated)
-                        self.ui.stream_update(model_streams[run_id][0], model_streams[run_id][1])
+                            now = time.monotonic()
+                            if now - last_update[run_id] >= INTERVAL:
+                                self.ui.stream_update(stream_id, accumulated)
+                                last_update[run_id] = now
 
                 elif kind == "on_chat_model_end":
                     output = event["data"].get("output")
                     has_tool_calls = bool(getattr(output, "tool_calls", None))
                     stream_entry = model_streams.pop(run_id, None)
+                    last_update.pop(run_id, None)
 
                     if stream_entry:
-                        stream_id, _ = stream_entry
+                        stream_id, accumulated = stream_entry
                         if has_tool_calls:
                             # intermediate tool-calling step — discard the partial bubble
                             bubble = self.ui._active_streams.pop(stream_id, None)
@@ -125,10 +141,15 @@ class ChatMCPController:
                                     children.remove(bubble.widget)
                                     self.ui.chat_box.children = tuple(children)
                         else:
+                            # flush any buffered tokens before finalizing
+                            self.ui.stream_update(stream_id, accumulated)
                             self.ui.end_stream(stream_id)
                     elif not has_tool_calls and output and output.content:
                         # no streaming happened (e.g. model returned full response at once)
-                        self.ui.receive_message(output.content, "bot")
+                        c = output.content
+                        if isinstance(c, list):
+                            c = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in c)
+                        self.ui.receive_message(c, "bot")
 
         try:
             run_async(_stream())
