@@ -29,7 +29,6 @@ class ChatMCPController:
                 f"Only OpenAI chat interfaces are supported for now. Received '{model}'."
             )
         self.model = model
-        self._seen_msgs = 0  # message counter
 
         self.lookup_tool_server = self.mcp.get_tool_server_dict()
         self.server_port_dict = self.mcp.get_server_port_dict()
@@ -51,6 +50,7 @@ class ChatMCPController:
         # connect UI
         self.ui.on_send(self.handle_input)
 
+
     def display(self):
         self.ui.display()
 
@@ -71,53 +71,36 @@ class ChatMCPController:
         self.ui.set_busy(True)
         self.ui.show_waiting_indicator()
 
+        async def _stream():
+            async for event in self.agent.astream_events(
+                {"messages": [{"role": "user", "content": msg}]},
+                {"configurable": {"thread_id": "1"}},
+                version="v2",
+            ):
+                kind = event["event"]
+
+                if kind == "on_tool_start":
+                    tool_name = event["name"]
+                    run_id = event["run_id"]
+                    args = event["data"].get("input", {})
+                    server_name = self.lookup_tool_server.get(tool_name)
+                    full_tool_name = f"{server_name}::{tool_name}"
+                    self.ui.receive_tool_call(run_id, full_tool_name, str(args))
+
+                elif kind == "on_tool_end":
+                    tool_name = event["name"]
+                    run_id = event["run_id"]
+                    output = event["data"].get("output")
+                    content = output.content if hasattr(output, "content") else str(output)
+                    self.ui.receive_tool_reply(run_id, tool_name, content)
+
+                elif kind == "on_chat_model_end":
+                    output = event["data"].get("output")
+                    if output and output.content and not getattr(output, "tool_calls", None):
+                        self.ui.receive_message(output.content, "bot")
+
         try:
-            print("trying send ", msg)
-            result = run_async(
-                self.agent.ainvoke(
-                    {"messages": [{"role": "user", "content": msg}]},
-                    {"configurable": {"thread_id": "1"}},
-                )
-            )
-
-            # only handle new messages
-            new_msgs = result["messages"][self._seen_msgs:]
-            self._seen_msgs = len(result["messages"])
-
-            for m in new_msgs:
-                if hasattr(m, "tool_calls") and m.tool_calls:
-                    for call in m.tool_calls:
-                        tool_name = call["name"]
-                        call_id = (
-                            call.get("id")
-                            if isinstance(call, dict)
-                            else getattr(call, "id", None)
-                        )
-                        if not call_id:
-                            call_id = tool_name or "tool_call"
-                        call_id = str(call_id)
-                        server_name = self.lookup_tool_server.get(tool_name)
-                        full_tool_name = f"{server_name}::{tool_name}"
-                        tool_args = str(call["args"])
-                        self.ui.receive_tool_call(call_id, full_tool_name, tool_args)
-                elif getattr(m, "name", None) and m.__class__.__name__ == "ToolMessage":
-                    tool_name = getattr(m, "tool_name", None)
-                    call_id = (
-                        getattr(m, "tool_call_id", None)
-                        or getattr(m, "id", None)
-                        or getattr(m, "name", None)
-                        or tool_name
-                    )
-                    call_id = str(call_id) if call_id is not None else "tool"
-                    self.ui.receive_tool_reply(call_id, tool_name, m.content)
-                elif (
-                    m.__class__.__name__ == "AIMessage"
-                    and m.content
-                    and len(m.content) > 0
-                ):
-                    print(m.content)
-                    self.ui.receive_message(m.content, "bot")
-
+            run_async(_stream())
         except Exception as e:
             self.ui.receive_message(f"⚠️ Error: {e}", "bot")
         finally:
@@ -176,7 +159,6 @@ class ChatMCPController:
 
     def __command_clear(self):
         self.agent.checkpointer = InMemorySaver()
-        self._seen_msgs = 0
         return "🧹 Conversation history cleared."
 
 
