@@ -19,11 +19,19 @@ class ChatBubble:
 
         self.widget = widgets.HTML(value=self._build_html(text))
 
-    def _build_html(self, text: str) -> str:
-        rendered = markdown(
-            text,
-            extensions=["fenced_code", "tables", CodeHiliteExtension(noclasses=True, pygments_style="default")]
-        )
+    def _build_html(self, text) -> str:
+        if not isinstance(text, str):
+            text = str(text) if text is not None else ""
+        try:
+            rendered = markdown(
+                text,
+                extensions=["fenced_code", "tables", CodeHiliteExtension(noclasses=True, pygments_style="default")]
+            )
+        except Exception:
+            rendered = f"<pre>{text}</pre>"
+        return self._wrap_html(rendered)
+
+    def _wrap_html(self, rendered: str) -> str:
         return f"""
             <style>
             @keyframes cb-fade-in {{

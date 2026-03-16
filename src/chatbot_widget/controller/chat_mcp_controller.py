@@ -59,7 +59,9 @@ class ChatMCPController:
     # Main entrypoint
     # ---------------------------------------------------------------
 
-    def handle_input(self, msg: str):
+    def handle_input(self, msg):
+        if not isinstance(msg, str):
+            msg = str(msg)
         if not msg.strip():
             return
 
@@ -77,7 +79,7 @@ class ChatMCPController:
             model_streams: dict[str, tuple[str, str]] = {}
             # run_id -> last UI update timestamp
             last_update: dict[str, float] = {}
-            INTERVAL = 0.08  # seconds between UI refreshes during streaming
+            INTERVAL = 1.0  # seconds between UI refreshes during streaming
 
             async for event in self.agent.astream_events(
                 {"messages": [{"role": "user", "content": msg}]},
@@ -92,12 +94,24 @@ class ChatMCPController:
                     args = event["data"].get("input", {})
                     server_name = self.lookup_tool_server.get(tool_name)
                     full_tool_name = f"{server_name}::{tool_name}"
-                    self.ui.receive_tool_call(run_id, full_tool_name, json.dumps(args, ensure_ascii=False))
+                    try:
+                        serialized = json.dumps(args, ensure_ascii=False, default=str)
+                    except Exception:
+                        serialized = str(args)
+                    self.ui.receive_tool_call(run_id, full_tool_name, serialized)
 
                 elif kind == "on_tool_end":
                     tool_name = event["name"]
                     output = event["data"].get("output")
-                    content = output.content if hasattr(output, "content") else str(output)
+                    if hasattr(output, "content"):
+                        content = output.content
+                        if isinstance(content, list):
+                            content = "\n".join(
+                                b.get("text", "") if isinstance(b, dict) else str(b)
+                                for b in content
+                            )
+                    else:
+                        content = str(output)
                     self.ui.receive_tool_reply(run_id, tool_name, content)
 
                 elif kind == "on_chat_model_stream":

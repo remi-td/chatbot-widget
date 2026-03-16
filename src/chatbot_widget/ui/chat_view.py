@@ -162,8 +162,10 @@ class ChatView:
             self.chat_box.children = tuple(children)
         self._thinking_widget = None
 
-    def receive_message(self, text: str, sender: str = "bot"):
+    def receive_message(self, text, sender: str = "bot"):
         """Display a message (from controller)."""
+        if not isinstance(text, str):
+            text = str(text)
         if sender != "user":
             self.hide_waiting_indicator()
         bubble = ChatBubble(text, sender)
